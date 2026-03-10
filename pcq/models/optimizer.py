@@ -3,11 +3,12 @@
 Détermine les meilleurs moments pour utiliser l'électricité produite
 plutôt que de la réinjecter dans le réseau.
 
-Principes :
-- Réinjecter = vendre à ~0.13€/kWh (tarif OA)
-- Autoconsommer = économiser ~0.25€/kWh (prix achat HP)
+Principes (tarifs Groupe E 2026, Cudrefin, Suisse) :
+- Réinjecter = vendre à ~8.6-13.8 ct/kWh (tarif reprise trimestriel OFEN)
+- Autoconsommer = économiser ~27.6 ct/kWh (prix achat HT Groupe E)
 - Donc autoconsommer est TOUJOURS plus rentable que réinjecter
 - L'enjeu est de DÉCALER la consommation vers les heures de production
+- BT Groupe E 2026 : 12h-17h et 23h-07h (tous les jours)
 """
 
 from datetime import datetime, timedelta

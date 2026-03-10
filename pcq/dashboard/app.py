@@ -1,6 +1,7 @@
 """Dashboard web de monitoring solaire avec Streamlit.
 
 Lance avec : streamlit run pcq/dashboard/app.py
+Actualisation automatique configurable.
 """
 
 import sys
@@ -19,7 +20,7 @@ from pcq.utils.database import Database
 
 # --- Configuration de la page ---
 st.set_page_config(
-    page_title="PCQ - Monitoring Solaire 19kW",
+    page_title="PCQ - Monitoring Solaire 19kW | Cudrefin",
     page_icon="☀️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -31,10 +32,39 @@ predictor = ProductionPredictor(config.installation)
 optimizer = SelfConsumptionOptimizer(config)
 db = Database(config.db_path)
 
+# --- Actualisation automatique ---
+REFRESH_INTERVAL = config.refresh_interval_seconds
+
+
+def get_current_quarter() -> int:
+    """Retourne le trimestre actuel (1-4)."""
+    return (datetime.now().month - 1) // 3 + 1
+
+
+def get_current_feed_in_tariff() -> float:
+    """Retourne le tarif de reprise selon le trimestre actuel."""
+    q = get_current_quarter()
+    tariffs = {
+        1: config.tariff.feed_in_q1,
+        2: config.tariff.feed_in_q2,
+        3: config.tariff.feed_in_q3,
+        4: config.tariff.feed_in_q4,
+    }
+    return tariffs.get(q, config.tariff.feed_in_tariff)
+
 
 def render_header():
-    st.title("PCQ - Monitoring Solaire")
-    st.caption(f"Installation {config.installation.peak_power_kwc} kWc | Onduleur Huawei")
+    col_title, col_refresh = st.columns([4, 1])
+    with col_title:
+        st.title("PCQ - Monitoring Solaire")
+        st.caption(
+            f"Installation {config.installation.peak_power_kwc} kWc | "
+            f"Onduleur Huawei | {config.installation.location} | "
+            f"Fournisseur: {config.tariff.provider}"
+        )
+    with col_refresh:
+        st.caption(f"Dernière MAJ: {datetime.now():%H:%M:%S}")
+        st.caption(f"Actualisation: {REFRESH_INTERVAL}s")
 
 
 def render_realtime_section():
@@ -42,8 +72,9 @@ def render_realtime_section():
     st.header("Temps Réel")
 
     latest = db.get_latest_production()
+    current_feed_in = get_current_feed_in_tariff()
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     if latest:
         production = latest.get("power_kw", 0) or 0
@@ -51,15 +82,23 @@ def render_realtime_section():
         efficiency = latest.get("efficiency", 0) or 0
         temp = latest.get("inverter_temp", 0) or 0
 
-        col1.metric("Production Actuelle", f"{production:.1f} kW", delta=None)
+        col1.metric("Production Actuelle", f"{production:.1f} kW")
         col2.metric("Production Jour", f"{daily:.1f} kWh")
         col3.metric("Rendement", f"{efficiency:.0f}%")
         col4.metric("Temp. Onduleur", f"{temp:.0f}°C")
+        col5.metric(
+            f"Tarif Reprise Q{get_current_quarter()}",
+            f"{current_feed_in * 100:.1f} ct/kWh",
+        )
     else:
         col1.metric("Production Actuelle", "-- kW")
         col2.metric("Production Jour", "-- kWh")
         col3.metric("Rendement", "--%")
         col4.metric("Temp. Onduleur", "--°C")
+        col5.metric(
+            f"Tarif Reprise Q{get_current_quarter()}",
+            f"{current_feed_in * 100:.1f} ct/kWh",
+        )
         st.info(
             "Aucune donnée temps réel disponible. "
             "Lancez le collecteur : `python -m pcq.collector`"
@@ -70,7 +109,6 @@ def render_prediction_section():
     """Section prédiction de production."""
     st.header("Prédiction de Production")
 
-    # Prévision du jour
     weather = predictor.get_weather_forecast(days=3)
     today_pred = predictor.predict_day(datetime.now(), weather)
 
@@ -85,15 +123,9 @@ def render_prediction_section():
         f"{today_pred['sunrise_approx']} - {today_pred['sunset_approx']}",
     )
 
-    # Graphique de production horaire
-    hourly_data = today_pred["hourly"]
-    times = [h["time"] for h in hourly_data]
-    powers = [h["power_kw"] for h in hourly_data]
-    clouds = [h["cloud_cover"] * 100 for h in hourly_data]
-
     import pandas as pd
 
-    # Sous-échantillonner pour lisibilité (1 point par heure)
+    hourly_data = today_pred["hourly"]
     df_hourly = pd.DataFrame(hourly_data)
     df_hourly["time_dt"] = pd.to_datetime(
         today_pred["date"] + " " + df_hourly["time"]
@@ -129,19 +161,21 @@ def render_optimizer_section():
     """Section optimisation de l'autoconsommation."""
     st.header("Optimisation Autoconsommation")
 
-    st.markdown("""
-    **Principe** : Autoconsommer votre production est **toujours plus rentable**
-    que réinjecter dans le réseau :
-    - Réinjection = {feed_in:.4f} €/kWh (tarif OA)
-    - Achat évité = {buy:.4f} €/kWh (heures pleines)
-    - **Gain net par kWh autoconsommé = {gain:.4f} €**
-    """.format(
-        feed_in=config.tariff.feed_in_tariff,
-        buy=config.tariff.buy_price_peak,
-        gain=config.tariff.buy_price_peak - config.tariff.feed_in_tariff,
-    ))
+    current_feed_in = get_current_feed_in_tariff()
+    q = get_current_quarter()
 
-    # Prédiction pour l'optimisation
+    st.markdown(
+        "**Principe** : Autoconsommer votre production est **toujours plus rentable** "
+        "que réinjecter dans le réseau :\n"
+        f"- Réinjection Q{q} = {current_feed_in * 100:.1f} ct/kWh "
+        f"(tarif reprise Groupe E avec GO)\n"
+        f"- Achat évité HT = {config.tariff.buy_price_peak * 100:.1f} ct/kWh "
+        f"(haut tarif Groupe E)\n"
+        f"- **Gain net par kWh autoconsommé = "
+        f"{(config.tariff.buy_price_peak - current_feed_in) * 100:.1f} ct CHF**\n\n"
+        "*Bas tarif Groupe E 2026 : 12h-17h et 23h-07h (tous les jours)*"
+    )
+
     weather = predictor.get_weather_forecast(days=1)
     today = predictor.predict_day(datetime.now(), weather)
 
@@ -179,7 +213,7 @@ def render_optimizer_section():
                     f"**{name}** : {rec['recommended_start']} → "
                     f"{rec['recommended_end']} | "
                     f"Autoconsommé: {rec['estimated_self_consumed_kwh']} kWh | "
-                    f"Économie: {rec['estimated_savings_eur']:.3f} €"
+                    f"Économie: {rec['estimated_savings_eur']:.3f} CHF"
                 )
 
             st.divider()
@@ -196,7 +230,7 @@ def render_optimizer_section():
             )
             mcol3.metric(
                 "Économies Estimées",
-                f"{summary['total_estimated_savings_eur']:.3f} €",
+                f"{summary['total_estimated_savings_eur']:.3f} CHF",
             )
 
 
@@ -217,15 +251,14 @@ def render_financial_section():
         col1, col2, col3, col4 = st.columns(4)
 
         total_prod = df["total_production_kwh"].sum()
-        total_export = df["exported_kwh"].sum()
         total_self = df["self_consumed_kwh"].sum()
         revenue = df["revenue_injection"].sum()
         savings = df["savings_self_consumption"].sum()
 
         col1.metric("Production 30j", f"{total_prod:.0f} kWh")
         col2.metric("Autoconsommé", f"{total_self:.0f} kWh")
-        col3.metric("Revenu Injection", f"{revenue:.2f} €")
-        col4.metric("Économies Autoconso", f"{savings:.2f} €")
+        col3.metric("Revenu Injection", f"{revenue:.2f} CHF")
+        col4.metric("Économies Autoconso", f"{savings:.2f} CHF")
 
         st.bar_chart(
             df[["date", "total_production_kwh", "self_consumed_kwh", "exported_kwh"]]
@@ -239,13 +272,16 @@ def render_financial_section():
 
     # Projection annuelle
     st.subheader("Projection Annuelle")
-    # Estimation basée sur la prédiction
     week = predictor.predict_week()
     avg_daily = sum(p["total_estimated_kwh"] for p in week) / len(week)
 
     col1, col2, col3 = st.columns(3)
     annual_prod = avg_daily * 365
-    annual_revenue_full_injection = annual_prod * config.tariff.feed_in_tariff
+    avg_feed_in = (
+        config.tariff.feed_in_q1 + config.tariff.feed_in_q2
+        + config.tariff.feed_in_q3 + config.tariff.feed_in_q4
+    ) / 4
+    annual_revenue_full_injection = annual_prod * avg_feed_in
     annual_savings_full_self = annual_prod * config.tariff.buy_price_peak
 
     col1.metric(
@@ -254,11 +290,30 @@ def render_financial_section():
     )
     col2.metric(
         "Si 100% Réinjection",
-        f"{annual_revenue_full_injection:.0f} €/an",
+        f"{annual_revenue_full_injection:.0f} CHF/an",
     )
     col3.metric(
         "Si 100% Autoconsommation",
-        f"{annual_savings_full_self:.0f} €/an",
+        f"{annual_savings_full_self:.0f} CHF/an",
+    )
+
+    # Détail trimestriel des tarifs de reprise
+    st.subheader("Tarifs de Reprise Groupe E par Trimestre")
+    import pandas as pd
+    df_tariffs = pd.DataFrame({
+        "Trimestre": ["Q1 (Jan-Mar)", "Q2 (Avr-Jun)", "Q3 (Jul-Sep)", "Q4 (Oct-Déc)"],
+        "Tarif (ct/kWh)": [
+            config.tariff.feed_in_q1 * 100,
+            config.tariff.feed_in_q2 * 100,
+            config.tariff.feed_in_q3 * 100,
+            config.tariff.feed_in_q4 * 100,
+        ],
+        "Saison": ["Hiver (GO 3ct)", "Été (GO 1ct)", "Été (GO 1ct)", "Hiver (GO 3ct)"],
+    })
+    st.dataframe(df_tariffs, use_container_width=True, hide_index=True)
+    st.caption(
+        "Tarifs basés sur les prix du marché OFEN, ajustés trimestriellement. "
+        "Prix plancher garanti : 6 ct/kWh (sans GO) / 10 ct/kWh (avec GO) pour < 30 kW."
     )
 
 
@@ -284,30 +339,44 @@ def render_settings_sidebar():
             "Azimut (°, 180=Sud)", 0, 360, int(config.installation.azimuth)
         )
 
-        st.subheader("Tarifs")
+        st.subheader("Tarifs Groupe E (CHF/kWh)")
         config.tariff.feed_in_tariff = st.number_input(
-            "Tarif rachat OA (€/kWh)",
+            "Tarif reprise moyen (CHF/kWh)",
             value=config.tariff.feed_in_tariff,
             format="%.4f",
         )
         config.tariff.buy_price_peak = st.number_input(
-            "Prix achat HP (€/kWh)",
+            "Prix achat HT (CHF/kWh)",
             value=config.tariff.buy_price_peak,
             format="%.4f",
         )
         config.tariff.buy_price_offpeak = st.number_input(
-            "Prix achat HC (€/kWh)",
+            "Prix achat BT (CHF/kWh)",
             value=config.tariff.buy_price_offpeak,
             format="%.4f",
         )
 
+        st.subheader("Actualisation")
+        refresh = st.selectbox(
+            "Intervalle (secondes)",
+            options=[30, 60, 120, 300],
+            index=[30, 60, 120, 300].index(REFRESH_INTERVAL)
+            if REFRESH_INTERVAL in [30, 60, 120, 300]
+            else 1,
+        )
+
         st.divider()
-        st.caption("PCQ v0.1.0 | Monitoring Solaire Huawei 19kW")
+        st.caption(
+            f"PCQ v0.1.0 | {config.installation.location} | "
+            f"{config.installation.peak_power_kwc} kWc | {config.tariff.provider}"
+        )
+
+        return refresh
 
 
 # --- MAIN ---
 def main():
-    render_settings_sidebar()
+    refresh = render_settings_sidebar()
     render_header()
     render_realtime_section()
     st.divider()
@@ -317,9 +386,13 @@ def main():
     st.divider()
     render_financial_section()
 
+    # Auto-refresh
+    import time
+    time.sleep(refresh)
+    st.rerun()
+
 
 if __name__ == "__main__":
     main()
 else:
-    # Exécuté par streamlit run
     main()
