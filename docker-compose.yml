@@ -1,0 +1,31 @@
+services:
+  # Collecteur de données (tourne en permanence)
+  collector:
+    build: .
+    container_name: pcq-collector
+    command: python -m pcq --mode local --host ${INVERTER_IP:-192.168.1.100} --interval ${COLLECT_INTERVAL:-60}
+    volumes:
+      - pcq-data:/app/pcq/data
+    env_file:
+      - .env
+    restart: unless-stopped
+    network_mode: host  # Nécessaire pour accéder à l'onduleur sur le LAN
+
+  # Dashboard web Streamlit
+  dashboard:
+    build: .
+    container_name: pcq-dashboard
+    command: streamlit run pcq/dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    ports:
+      - "8501:8501"
+    volumes:
+      - pcq-data:/app/pcq/data
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      - collector
+
+volumes:
+  pcq-data:
+    driver: local
