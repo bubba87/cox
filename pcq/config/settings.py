@@ -66,11 +66,26 @@ class TariffConfig:
 
 
 @dataclass
+class RetentionConfig:
+    """Politique de rétention et agrégation des données."""
+    # Données brutes (1 min) : conservées X jours
+    raw_retention_days: int = 7
+    # Données 15 min : conservées X jours
+    quarter_hour_retention_days: int = 90
+    # Données horaires : conservées X jours
+    hourly_retention_days: int = 730  # ~2 ans
+    # Résumés journaliers : conservés indéfiniment
+    # Heure de maintenance quotidienne (agrégation + purge)
+    maintenance_hour: int = 2  # 02h00 du matin
+
+
+@dataclass
 class AppConfig:
     """Configuration globale de l'application."""
     installation: InstallationConfig = field(default_factory=InstallationConfig)
     huawei: HuaweiConfig = field(default_factory=HuaweiConfig)
     tariff: TariffConfig = field(default_factory=TariffConfig)
+    retention: RetentionConfig = field(default_factory=RetentionConfig)
     # Port du dashboard web
     dashboard_port: int = 8501
     # Chemin de la base de données SQLite

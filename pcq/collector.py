@@ -1,6 +1,7 @@
 """Collecteur de données solaires.
 
 Lance la collecte périodique des données depuis l'onduleur Huawei.
+Inclut la maintenance automatique (agrégation + purge) à 02h00.
 
 Usage:
     # Via l'API cloud FusionSolar
@@ -72,7 +73,6 @@ def collect_demo(db: Database, peak_kwc: float = 19.0):
     now = datetime.now()
     hour = now.hour + now.minute / 60
 
-    # Simuler la courbe de production solaire (gaussienne centrée à midi)
     if 6 <= hour <= 20:
         solar_factor = math.exp(-0.5 * ((hour - 13) / 3) ** 2)
         cloud_factor = 1.0 - random.uniform(0, 0.3)
@@ -106,6 +106,41 @@ def collect_demo(db: Database, peak_kwc: float = 19.0):
     )
 
 
+def maybe_run_maintenance(config: AppConfig, db: Database, last_maintenance_date: str) -> str:
+    """Exécute la maintenance quotidienne si l'heure est venue.
+
+    Returns:
+        La date de la dernière maintenance effectuée.
+    """
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+
+    if today == last_maintenance_date:
+        return last_maintenance_date
+
+    if now.hour == config.retention.maintenance_hour:
+        print(f"\n[{now:%H:%M:%S}] Maintenance quotidienne en cours...")
+        try:
+            stats = db.run_maintenance(config.retention)
+            total_deleted = sum(
+                v for k, v in stats.items()
+                if isinstance(v, int) and k.endswith("_deleted")
+            )
+            db_stats = db.get_db_stats()
+            print(f"[{now:%H:%M:%S}] Maintenance terminée:")
+            print(f"  - Lignes purgées: {total_deleted}")
+            print(f"  - Taille DB: {db_stats.get('file_size_mb', '?')} MB")
+            print(f"  - Brut: {db_stats.get('production', 0)} | "
+                  f"15min: {db_stats.get('production_quarter_hour', 0)} | "
+                  f"Horaire: {db_stats.get('production_hourly', 0)} | "
+                  f"Jours: {db_stats.get('daily_summary', 0)}\n")
+            return today
+        except Exception as e:
+            print(f"[{now:%H:%M:%S}] Erreur maintenance: {e}\n")
+
+    return last_maintenance_date
+
+
 def main():
     parser = argparse.ArgumentParser(description="Collecteur de données solaires PCQ")
     parser.add_argument(
@@ -129,9 +164,14 @@ def main():
 
     config = AppConfig()
     db = Database(config.db_path)
+    last_maintenance = ""
 
     print(f"PCQ Collecteur - Mode: {args.mode} | Intervalle: {args.interval}s")
-    print(f"Installation: {config.installation.peak_power_kwc} kWc")
+    print(f"Installation: {config.installation.peak_power_kwc} kWc | {config.installation.location}")
+    print(f"Rétention: brut {config.retention.raw_retention_days}j | "
+          f"15min {config.retention.quarter_hour_retention_days}j | "
+          f"horaire {config.retention.hourly_retention_days}j")
+    print(f"Maintenance auto: {config.retention.maintenance_hour:02d}h00")
     print("Ctrl+C pour arrêter\n")
 
     while True:
@@ -142,6 +182,9 @@ def main():
                 collect_local(args.host, db)
             else:
                 collect_demo(db, config.installation.peak_power_kwc)
+
+            # Vérifier si maintenance nécessaire
+            last_maintenance = maybe_run_maintenance(config, db, last_maintenance)
 
             time.sleep(args.interval)
         except KeyboardInterrupt:
