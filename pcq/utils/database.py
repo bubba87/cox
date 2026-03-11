@@ -138,6 +138,23 @@ class Database:
                     days_with_data INTEGER
                 );
 
+                -- Historique des tarifs
+                CREATE TABLE IF NOT EXISTS tariff_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    year INTEGER NOT NULL,
+                    quarter INTEGER,
+                    buy_price_peak REAL,
+                    buy_price_offpeak REAL,
+                    feed_in_tariff REAL,
+                    feed_in_q1 REAL,
+                    feed_in_q2 REAL,
+                    feed_in_q3 REAL,
+                    feed_in_q4 REAL,
+                    source TEXT,
+                    UNIQUE(year, quarter)
+                );
+
                 CREATE TABLE IF NOT EXISTS weather_forecast (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp TEXT NOT NULL,
@@ -248,6 +265,38 @@ class Database:
                     data.get("hours_of_production"),
                 ),
             )
+
+    def insert_tariff_snapshot(self, tariff_config, source: str = "auto"):
+        """Enregistre un snapshot des tarifs actuels."""
+        now = datetime.now()
+        quarter = (now.month - 1) // 3 + 1
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO tariff_history
+                   (timestamp, year, quarter, buy_price_peak, buy_price_offpeak,
+                    feed_in_tariff, feed_in_q1, feed_in_q2, feed_in_q3, feed_in_q4, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    now.isoformat(),
+                    now.year,
+                    quarter,
+                    tariff_config.buy_price_peak,
+                    tariff_config.buy_price_offpeak,
+                    tariff_config.feed_in_tariff,
+                    tariff_config.feed_in_q1,
+                    tariff_config.feed_in_q2,
+                    tariff_config.feed_in_q3,
+                    tariff_config.feed_in_q4,
+                    source,
+                ),
+            )
+
+    def get_tariff_history(self) -> list:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM tariff_history ORDER BY year, quarter"
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     # --- Lecture ---
 
@@ -616,7 +665,7 @@ class Database:
                 "production_quarter_hour", "grid_quarter_hour",
                 "production_hourly", "grid_hourly",
                 "daily_summary", "monthly_summary",
-                "weather_forecast", "maintenance_log",
+                "tariff_history", "weather_forecast", "maintenance_log",
             ]:
                 row = conn.execute(f"SELECT COUNT(*) as cnt FROM {table}").fetchone()
                 stats[table] = row["cnt"]

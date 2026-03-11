@@ -19,9 +19,11 @@ import math
 import random
 import time
 from datetime import datetime
+from pathlib import Path
 
 from pcq.config import AppConfig
 from pcq.api.huawei_client import HuaweiFusionSolarClient, HuaweiModbusClient
+from pcq.api.tariff_updater import TariffUpdater
 from pcq.utils.database import Database
 
 
@@ -121,6 +123,16 @@ def maybe_run_maintenance(config: AppConfig, db: Database, last_maintenance_date
     if now.hour == config.retention.maintenance_hour:
         print(f"\n[{now:%H:%M:%S}] Maintenance quotidienne en cours...")
         try:
+            # Mise à jour des tarifs
+            updater = TariffUpdater(str(Path(config.db_path).parent))
+            changes = updater.update_tariffs(config.tariff)
+            if changes:
+                db.insert_tariff_snapshot(config.tariff, source="auto")
+                print(f"[{now:%H:%M:%S}] Tarifs mis à jour: {changes}")
+            else:
+                print(f"[{now:%H:%M:%S}] Tarifs inchangés")
+
+            # Maintenance DB (agrégation + purge)
             stats = db.run_maintenance(config.retention)
             total_deleted = sum(
                 v for k, v in stats.items()

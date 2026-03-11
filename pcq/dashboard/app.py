@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+
 import streamlit as st
 
 # Ajouter le répertoire racine au path
@@ -16,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from pcq.config import AppConfig
 from pcq.models.prediction import ProductionPredictor
 from pcq.models.optimizer import SelfConsumptionOptimizer
+from pcq.api.tariff_updater import TariffUpdater
 from pcq.utils.database import Database
 
 # --- Configuration de la page ---
@@ -31,6 +33,7 @@ config = AppConfig()
 predictor = ProductionPredictor(config.installation)
 optimizer = SelfConsumptionOptimizer(config)
 db = Database(config.db_path)
+tariff_updater = TariffUpdater(str(Path(config.db_path).parent))
 
 # --- Actualisation automatique ---
 REFRESH_INTERVAL = config.refresh_interval_seconds
@@ -316,6 +319,16 @@ def render_financial_section():
         "Prix plancher garanti : 6 ct/kWh (sans GO) / 10 ct/kWh (avec GO) pour < 30 kW."
     )
 
+    # Historique des tarifs
+    tariff_history = db.get_tariff_history()
+    if tariff_history:
+        st.subheader("Historique des Tarifs")
+        df_th = pd.DataFrame(tariff_history)
+        cols_display = ["year", "quarter", "buy_price_peak", "buy_price_offpeak",
+                        "feed_in_tariff", "source", "timestamp"]
+        cols_present = [c for c in cols_display if c in df_th.columns]
+        st.dataframe(df_th[cols_present], use_container_width=True, hide_index=True)
+
 
 def render_settings_sidebar():
     """Barre latérale de configuration."""
@@ -340,6 +353,21 @@ def render_settings_sidebar():
         )
 
         st.subheader("Tarifs Groupe E (CHF/kWh)")
+
+        # Bouton de mise à jour automatique
+        if st.button("Mettre à jour les tarifs"):
+            changes = tariff_updater.update_tariffs(config.tariff)
+            if changes:
+                db.insert_tariff_snapshot(config.tariff, source="manuel")
+                st.success(f"Tarifs mis à jour : {len(changes)} changement(s)")
+                for k, v in changes.items():
+                    st.caption(f"  {k}: {v['old']} → {v['new']}")
+            else:
+                st.info("Tarifs déjà à jour")
+
+        tariff_status = tariff_updater.get_tariff_status()
+        st.caption(f"Dernière MAJ: {tariff_status['last_update']}")
+
         config.tariff.feed_in_tariff = st.number_input(
             "Tarif reprise moyen (CHF/kWh)",
             value=config.tariff.feed_in_tariff,
@@ -355,6 +383,30 @@ def render_settings_sidebar():
             value=config.tariff.buy_price_offpeak,
             format="%.4f",
         )
+
+        # Tarifs trimestriels de reprise
+        with st.expander("Tarifs reprise par trimestre"):
+            config.tariff.feed_in_q1 = st.number_input(
+                "Q1 Jan-Mar (CHF/kWh)", value=config.tariff.feed_in_q1, format="%.4f", key="q1"
+            )
+            config.tariff.feed_in_q2 = st.number_input(
+                "Q2 Avr-Jun (CHF/kWh)", value=config.tariff.feed_in_q2, format="%.4f", key="q2"
+            )
+            config.tariff.feed_in_q3 = st.number_input(
+                "Q3 Jul-Sep (CHF/kWh)", value=config.tariff.feed_in_q3, format="%.4f", key="q3"
+            )
+            config.tariff.feed_in_q4 = st.number_input(
+                "Q4 Oct-Déc (CHF/kWh)", value=config.tariff.feed_in_q4, format="%.4f", key="q4"
+            )
+            if st.button("Sauvegarder tarifs trimestriels"):
+                now = datetime.now()
+                for q, rate in enumerate(
+                    [config.tariff.feed_in_q1, config.tariff.feed_in_q2,
+                     config.tariff.feed_in_q3, config.tariff.feed_in_q4], 1
+                ):
+                    tariff_updater.set_quarterly_feed_in(q, rate, now.year)
+                db.insert_tariff_snapshot(config.tariff, source="manuel_sidebar")
+                st.success("Tarifs trimestriels sauvegardés")
 
         st.subheader("Actualisation")
         refresh = st.selectbox(
