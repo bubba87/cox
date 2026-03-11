@@ -72,6 +72,19 @@ Le dashboard s'ouvre sur http://localhost:8501 et s'actualise automatiquement (c
 | `cloud` | Accès depuis n'importe où | Compte FusionSolar |
 | `local` | Temps réel, pas de dépendance cloud | Réseau local onduleur + pymodbus |
 
+## Deploiement QNAP
+
+Voir le guide complet : **[docs/GUIDE_QNAP.md](../docs/GUIDE_QNAP.md)**
+
+```bash
+docker-compose up -d --build
+# Dashboard sur http://<IP-QNAP>:8501
+```
+
+## Activer Modbus sur l'onduleur
+
+Voir le guide complet : **[docs/GUIDE_MODBUS_HUAWEI.md](../docs/GUIDE_MODBUS_HUAWEI.md)**
+
 ## Architecture
 
 ```

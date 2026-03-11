@@ -13,6 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Code applicatif
 COPY pcq/ pcq/
 
+# Configuration Streamlit (écoute sur 0.0.0.0)
+COPY .streamlit/ /root/.streamlit/
+
 # Volume pour la base de données persistante
 VOLUME /app/pcq/data
 
