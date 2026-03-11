@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from pcq.config import AppConfig
 from pcq.models.prediction import ProductionPredictor
 from pcq.models.optimizer import SelfConsumptionOptimizer
+from pcq.models.amortization import AmortizationCalculator
 from pcq.api.tariff_updater import TariffUpdater
 from pcq.utils.database import Database
 
@@ -34,6 +35,7 @@ predictor = ProductionPredictor(config.installation)
 optimizer = SelfConsumptionOptimizer(config)
 db = Database(config.db_path)
 tariff_updater = TariffUpdater(str(Path(config.db_path).parent))
+amort_calc = AmortizationCalculator(config)
 
 # --- Actualisation automatique ---
 REFRESH_INTERVAL = config.refresh_interval_seconds
@@ -330,6 +332,116 @@ def render_financial_section():
         st.dataframe(df_th[cols_present], use_container_width=True, hide_index=True)
 
 
+def render_amortization_section():
+    """Section amortissement et retour sur investissement."""
+    st.header("Amortissement")
+
+    import pandas as pd
+
+    inv = config.investment
+
+    # KPIs en haut
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Coût Installation", f"{inv.total_cost:,.0f} CHF")
+    col2.metric("Subvention Pronovo", f"-{inv.subsidy_pronovo:,.0f} CHF")
+    col3.metric("Autres Subventions", f"-{inv.subsidy_other:,.0f} CHF")
+    col4.metric("Investissement Net", f"{inv.net_cost:,.0f} CHF")
+
+    # Calcul principal
+    result = amort_calc.calculate_amortization()
+    summary = result["summary"]
+
+    st.subheader("Retour sur Investissement")
+
+    col1, col2, col3, col4 = st.columns(4)
+    payback = summary["payback_years"]
+    col1.metric(
+        "Amortissement",
+        f"{payback:.1f} ans" if payback else "N/A",
+        delta=f"en {summary['payback_date']}" if payback else None,
+    )
+    col2.metric("Gain Total (25 ans)", f"{summary['total_gains_chf']:,.0f} CHF")
+    col3.metric("Profit Net (25 ans)", f"{summary['total_profit_chf']:,.0f} CHF")
+    col4.metric("LCOE", f"{summary['lcoe_ct_kwh']:.1f} ct/kWh")
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("ROI sur 25 ans", f"{summary['roi_25y_pct']:.0f}%")
+    col2.metric("Gain Annuel Moyen", f"{summary['avg_annual_gain_chf']:,.0f} CHF/an")
+    col3.metric("Production Totale", f"{summary['total_production_kwh']:,.0f} kWh")
+
+    # Graphique d'amortissement
+    st.subheader("Courbe d'Amortissement")
+    yearly = result["yearly"]
+
+    df_amort = pd.DataFrame([{
+        "Année": r.year,
+        "Gain Cumulé (CHF)": r.cumulative_gain_chf,
+        "Investissement Net": inv.net_cost,
+    } for r in yearly])
+
+    st.line_chart(
+        df_amort.set_index("Année"),
+        color=["#2ecc71", "#e74c3c"],
+    )
+
+    if payback:
+        start_year = int(inv.commissioning_date[:4])
+        st.caption(
+            f"Point d'amortissement atteint en **{summary['payback_date']}** "
+            f"({payback:.1f} ans). "
+            f"Après cette date, chaque kWh produit est du profit net."
+        )
+
+    # Tableau détaillé
+    with st.expander("Détail Année par Année"):
+        df_detail = pd.DataFrame([{
+            "Année": r.year,
+            "Production (kWh)": f"{r.production_kwh:,.0f}",
+            "Autoconsommé (kWh)": f"{r.self_consumed_kwh:,.0f}",
+            "Revenu Injection": f"{r.revenue_injection_chf:,.2f}",
+            "Économies Autoconso": f"{r.savings_self_consumption_chf:,.2f}",
+            "Gain Brut": f"{r.total_gain_chf:,.2f}",
+            "Maintenance": f"-{r.maintenance_cost_chf:,.2f}",
+            "Exceptionnel": f"-{r.exceptional_cost_chf:,.2f}" if r.exceptional_cost_chf > 0 else "-",
+            "Gain Net": f"{r.net_gain_chf:,.2f}",
+            "Cumulé": f"{r.cumulative_gain_chf:,.2f}",
+            "ROI": f"{r.roi_pct:.1f}%",
+        } for r in yearly])
+        st.dataframe(df_detail, use_container_width=True, hide_index=True)
+
+    # Analyse de sensibilité
+    st.subheader("Sensibilité au Taux d'Autoconsommation")
+    st.caption(
+        "L'amortissement dépend fortement de votre taux d'autoconsommation. "
+        "Plus vous consommez directement, plus le retour est rapide."
+    )
+
+    scenarios = amort_calc.sensitivity_analysis()
+    df_sens = pd.DataFrame([{
+        "Scénario": s["scenario_label"],
+        "Amortissement": f"{s['payback_years']:.1f} ans" if s["payback_years"] else "N/A",
+        "Profit 25 ans": f"{s['total_profit_chf']:,.0f} CHF",
+        "ROI": f"{s['roi_25y_pct']:.0f}%",
+        "Gain/an": f"{s['avg_annual_gain_chf']:,.0f} CHF",
+    } for s in scenarios])
+    st.dataframe(df_sens, use_container_width=True, hide_index=True)
+
+    # Graphique comparatif
+    df_sens_chart = pd.DataFrame([{
+        "Autoconsommation (%)": int(s["self_consumption_pct"]),
+        "Amortissement (années)": s["payback_years"] or 30,
+    } for s in scenarios]).set_index("Autoconsommation (%)")
+    st.bar_chart(df_sens_chart)
+
+    st.caption(
+        f"Hypothèses : dégradation {inv.annual_degradation_pct}%/an, "
+        f"hausse électricité {inv.electricity_price_increase_pct}%/an, "
+        f"remplacement onduleur à {inv.inverter_lifespan_years} ans "
+        f"({inv.inverter_replacement_cost:,.0f} CHF), "
+        f"maintenance {inv.annual_maintenance_cost:,.0f} CHF/an."
+    )
+
+
 def render_settings_sidebar():
     """Barre latérale de configuration."""
     with st.sidebar:
@@ -408,6 +520,60 @@ def render_settings_sidebar():
                 db.insert_tariff_snapshot(config.tariff, source="manuel_sidebar")
                 st.success("Tarifs trimestriels sauvegardés")
 
+        st.subheader("Investissement")
+        config.investment.total_cost = st.number_input(
+            "Coût total installation (CHF)",
+            value=config.investment.total_cost,
+            step=500.0,
+            format="%.0f",
+        )
+        config.investment.subsidy_pronovo = st.number_input(
+            "Subvention Pronovo (CHF)",
+            value=config.investment.subsidy_pronovo,
+            step=100.0,
+            format="%.0f",
+        )
+        config.investment.subsidy_other = st.number_input(
+            "Autres subventions (CHF)",
+            value=config.investment.subsidy_other,
+            step=100.0,
+            format="%.0f",
+        )
+        with st.expander("Paramètres avancés"):
+            config.investment.estimated_self_consumption_pct = st.slider(
+                "Taux autoconsommation (%)", 10, 90,
+                int(config.investment.estimated_self_consumption_pct),
+            )
+            config.investment.annual_degradation_pct = st.number_input(
+                "Dégradation panneaux (%/an)",
+                value=config.investment.annual_degradation_pct,
+                format="%.2f", step=0.1,
+            )
+            config.investment.electricity_price_increase_pct = st.number_input(
+                "Hausse prix élec. (%/an)",
+                value=config.investment.electricity_price_increase_pct,
+                format="%.1f", step=0.5,
+            )
+            config.investment.annual_maintenance_cost = st.number_input(
+                "Maintenance annuelle (CHF)",
+                value=config.investment.annual_maintenance_cost,
+                format="%.0f", step=50.0,
+            )
+            config.investment.inverter_replacement_cost = st.number_input(
+                "Remplacement onduleur (CHF)",
+                value=config.investment.inverter_replacement_cost,
+                format="%.0f", step=500.0,
+            )
+            config.investment.inverter_lifespan_years = st.number_input(
+                "Durée vie onduleur (ans)",
+                value=config.investment.inverter_lifespan_years,
+                step=1,
+            )
+            config.investment.commissioning_date = st.text_input(
+                "Date mise en service",
+                value=config.investment.commissioning_date,
+            )
+
         st.subheader("Actualisation")
         refresh = st.selectbox(
             "Intervalle (secondes)",
@@ -437,6 +603,8 @@ def main():
     render_optimizer_section()
     st.divider()
     render_financial_section()
+    st.divider()
+    render_amortization_section()
 
     # Auto-refresh
     import time

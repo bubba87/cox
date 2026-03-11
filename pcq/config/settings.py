@@ -66,6 +66,40 @@ class TariffConfig:
 
 
 @dataclass
+class InvestmentConfig:
+    """Données d'investissement pour le calcul d'amortissement."""
+    # Coût total de l'installation (CHF)
+    total_cost: float = 38000.0
+    # Subvention fédérale Pronovo / rétribution unique (CHF)
+    # Petites installations < 30 kW : ~350 CHF/kWc (2026)
+    subsidy_pronovo: float = 6650.0  # 19 kWc * 350 CHF/kWc
+    # Autres subventions (cantonale, communale)
+    subsidy_other: float = 0.0
+    # Coût net après subventions = total_cost - subsidy_pronovo - subsidy_other
+    # Date de mise en service (YYYY-MM-DD)
+    commissioning_date: str = "2026-01-01"
+    # Durée de vie estimée des panneaux (années)
+    panel_lifespan_years: int = 25
+    # Durée de vie estimée de l'onduleur (années)
+    inverter_lifespan_years: int = 15
+    # Coût de remplacement onduleur (CHF)
+    inverter_replacement_cost: float = 3500.0
+    # Coût de maintenance annuel moyen (CHF/an) - nettoyage, contrôle, assurance
+    annual_maintenance_cost: float = 200.0
+    # Dégradation annuelle des panneaux (% par an, typique 0.4-0.7%)
+    annual_degradation_pct: float = 0.5
+    # Taux d'autoconsommation moyen estimé (%)
+    estimated_self_consumption_pct: float = 35.0
+    # Hausse annuelle estimée du prix de l'électricité (%)
+    electricity_price_increase_pct: float = 2.0
+
+    @property
+    def net_cost(self) -> float:
+        """Coût net après toutes les subventions."""
+        return self.total_cost - self.subsidy_pronovo - self.subsidy_other
+
+
+@dataclass
 class RetentionConfig:
     """Politique de rétention et agrégation des données."""
     # Données brutes (1 min) : conservées X jours
@@ -85,6 +119,7 @@ class AppConfig:
     installation: InstallationConfig = field(default_factory=InstallationConfig)
     huawei: HuaweiConfig = field(default_factory=HuaweiConfig)
     tariff: TariffConfig = field(default_factory=TariffConfig)
+    investment: InvestmentConfig = field(default_factory=InvestmentConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
     # Port du dashboard web
     dashboard_port: int = 8501

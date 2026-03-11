@@ -1,3 +1,3 @@
-from .settings import AppConfig, InstallationConfig, HuaweiConfig, TariffConfig, RetentionConfig
+from .settings import AppConfig, InstallationConfig, HuaweiConfig, TariffConfig, InvestmentConfig, RetentionConfig
 
-__all__ = ["AppConfig", "InstallationConfig", "HuaweiConfig", "TariffConfig", "RetentionConfig"]
+__all__ = ["AppConfig", "InstallationConfig", "HuaweiConfig", "TariffConfig", "InvestmentConfig", "RetentionConfig"]
